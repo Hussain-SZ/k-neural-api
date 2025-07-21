@@ -53,6 +53,9 @@ import cai.util
 from tensorflow import keras
 from tensorflow.keras.models import Model
 
+from . import color_layers
+
+
 def InceptionV3(include_top=True,
                 weights='imagenet',
                 input_tensor=None,
@@ -550,147 +553,60 @@ def two_path_inception_v3(
         ValueError: in case of invalid argument for `weights`,
             or invalid input shape.
     """
-    img_input = keras.layers.Input(shape=input_shape)
-    if (deep_two_paths):  max_mix_deep_two_paths_idx = max_mix_idx
+    # This is the new, single-branch implementation.
+    # It will replace the entire body of the two_path_inception_v3 function.
+    
+    img_input = keras.layers.Input(shape=input_shape, name='rgb_input')
 
     if keras.backend.image_data_format() == 'channels_first':
         channel_axis = 1
     else:
         channel_axis = 3
+
+    # 1. Create LAB tensor from RGB input
+    lab_tensor = color_layers.RgbToLab(name='rgb_to_lab')(img_input)
+
+    # 2. Concatenate RGB and LAB to create a 6-channel tensor
+    x = keras.layers.Concatenate(axis=channel_axis, name='concat_rgb_lab')([img_input, lab_tensor])
     
-    if two_paths_partial_first_block==3:
-        two_paths_partial_first_block=0
-        two_paths_first_block=True
-        two_paths_second_block=False
+    # 3. Standard InceptionV3 architecture starts here, accepting the 6-channel input `x`
+    # The first conv layer will automatically adapt to the 6 input channels.
+    x = conv2d_bn(x, 32, 3, 3, strides=(2, 2), padding='valid')
+    x = conv2d_bn(x, 32, 3, 3, padding='valid')
+    x = conv2d_bn(x, 64, 3, 3)
+    x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(x)
 
-    if two_paths_partial_first_block>3:
-        two_paths_partial_first_block=0
-        two_paths_first_block=True
-        two_paths_second_block=True
+    x = conv2d_bn(x, 80, 1, 1, padding='valid')
+    x = conv2d_bn(x, 192, 3, 3, padding='valid')
+    x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(x)
 
-    if (two_paths_second_block):
-        two_paths_first_block=True
+    # mixed 0, 1, 2: 35 x 35 x 288
+    for i in range(3):
+        x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
+
+    # mixed 3: 17 x 17 x 768
+    x = create_inception_v3_mixed_layer(x, id=3, name='mixed3', channel_axis=channel_axis, kType=kType)
     
-    include_first_block=True
-    if (two_paths_partial_first_block==1) or (two_paths_partial_first_block==2):
-        two_paths_second_block=False
-        two_paths_first_block=False
-        include_first_block=False
-
-        # Only 1 convolution with two-paths?
-        if (two_paths_partial_first_block==1):
-            if (l_ratio>0):
-                l_branch = cai.layers.CopyChannels(0,1)(img_input)
-                l_branch = conv2d_bn(l_branch, int(round(32*l_ratio)), 3, 3, strides=(2, 2), padding='valid')
-
-            if (ab_ratio>0):
-                ab_branch = cai.layers.CopyChannels(1,2)(img_input)
-                ab_branch = conv2d_bn(ab_branch, int(round(32*ab_ratio)), 3, 3, strides=(2, 2), padding='valid')
-
-            if (l_ratio>0):
-                if (ab_ratio>0):
-                    single_branch  = keras.layers.Concatenate(axis=channel_axis, name='concat_partial_first_block1')([l_branch, ab_branch])
-                else:
-                    single_branch = l_branch
-            else:
-                single_branch = ab_branch
-
-            single_branch = conv2d_bn(single_branch, 32, 3, 3, padding='valid')
-            single_branch = conv2d_bn(single_branch, 64, 3, 3)
-            x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(single_branch)
-
-        # Only 2 convolution with two-paths?
-        if (two_paths_partial_first_block==2):
-            if (l_ratio>0):
-                l_branch = cai.layers.CopyChannels(0,1)(img_input)
-                l_branch = conv2d_bn(l_branch, int(round(32*l_ratio)), 3, 3, strides=(2, 2), padding='valid')
-                l_branch = conv2d_bn(l_branch, int(round(32*l_ratio)), 3, 3, padding='valid')
-
-            if (ab_ratio>0):
-                ab_branch = cai.layers.CopyChannels(1,2)(img_input)
-                ab_branch = conv2d_bn(ab_branch, int(round(32*ab_ratio)), 3, 3, strides=(2, 2), padding='valid')
-                ab_branch = conv2d_bn(ab_branch, int(round(32*ab_ratio)), 3, 3, padding='valid')
-
-            if (l_ratio>0):
-                if (ab_ratio>0):
-                    single_branch = keras.layers.Concatenate(axis=channel_axis, name='concat_partial_first_block2')([l_branch, ab_branch])
-                else:
-                    single_branch = l_branch
-            else:
-                single_branch = ab_branch
-
-            single_branch = conv2d_bn(single_branch, 64, 3, 3)
-            x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(single_branch)
-
-    if include_first_block:
-        if two_paths_first_block:
-            if (l_ratio>0):
-                l_branch = cai.layers.CopyChannels(0,1)(img_input)
-                l_branch = conv2d_bn(l_branch, int(round(32*l_ratio)), 3, 3, strides=(2, 2), padding='valid')
-                l_branch = conv2d_bn(l_branch, int(round(32*l_ratio)), 3, 3, padding='valid')
-                l_branch = conv2d_bn(l_branch, int(round(64*l_ratio)), 3, 3)
-                l_branch = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(l_branch)
-
-            if (ab_ratio>0):
-                ab_branch = cai.layers.CopyChannels(1,2)(img_input)
-                ab_branch = conv2d_bn(ab_branch, int(round(32*ab_ratio)), 3, 3, strides=(2, 2), padding='valid')
-                ab_branch = conv2d_bn(ab_branch, int(round(32*ab_ratio)), 3, 3, padding='valid')
-                ab_branch = conv2d_bn(ab_branch, int(round(64*ab_ratio)), 3, 3)
-                ab_branch = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(ab_branch)
+    # mixed 4, 5, 6: 17 x 17 x 768
+    for i in range(4, 7):
+        x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
+        # --- ADDING THE CBAM BLOCK ---
+        # We will add it after mixed5 as originally intended
+        if i == 5:
+            print("Applying CBAM Block Layer after mixed5...")
+            x = attention.CBAMBlock()(x)
+        # -----------------------------
             
-            if (l_ratio>0):
-                if (ab_ratio>0):
-                    x = keras.layers.Concatenate(axis=channel_axis, name='concat_first_block')([l_branch, ab_branch])
-                else:
-                    x = l_branch
-            else:
-                x = ab_branch
-        else:
-            single_branch = conv2d_bn(img_input, 32, 3, 3, strides=(2, 2), padding='valid')
-            single_branch = conv2d_bn(single_branch, 32, 3, 3, padding='valid')
-            single_branch = conv2d_bn(single_branch, 64, 3, 3)
-            single_branch = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(single_branch)
-            # print('single path first block')
-            x = single_branch
+    # mixed 7: 17 x 17 x 768
+    x = create_inception_v3_mixed_layer(x, id=7, name='mixed7', channel_axis=channel_axis, kType=kType)
 
-    if (two_paths_second_block):
-      #l_branch    = conv2d_bn(x, int(round(80*deep_two_paths_bottleneck_compression)), 1, 1, padding='valid', name='second_block_ta', activation=None, has_batch_norm=True)
-      #ab_branch = conv2d_bn(x, int(round(80*deep_two_paths_bottleneck_compression)), 1, 1, padding='valid', name='second_block_tb', activation=None, has_batch_norm=True)
-      l_branch    = create_inception_path(last_tensor=x, compression=deep_two_paths_bottleneck_compression, channel_axis=channel_axis, name='second_block_ta', activation=None, has_batch_norm=True, kType=kType)
-      ab_branch = create_inception_path(last_tensor=x, compression=deep_two_paths_bottleneck_compression, channel_axis=channel_axis, name='second_block_tb', activation=None, has_batch_norm=True, kType=kType)
-      
-      # l_branch    = conv2d_bn(l_branch,    int(round(80 *deep_two_paths_compression)), 1, 1, padding='valid')
-      l_branch = kInceptionPointwise(l_branch, filters=int(round(80 *deep_two_paths_compression)), name='l_branch_path', kType=kType)
-      l_branch    = conv2d_bn(l_branch,    int(round(192*deep_two_paths_compression)), 3, 3, padding='valid')
-      # ab_branch = conv2d_bn(ab_branch, int(round(80 *deep_two_paths_compression)), 1, 1, padding='valid')
-      ab_branch = kInceptionPointwise(ab_branch, filters=int(round(80 *deep_two_paths_compression)), name='ab_branch_path', kType=kType)
-      ab_branch = conv2d_bn(ab_branch, int(round(192*deep_two_paths_compression)), 3, 3, padding='valid')
-      
-      x = keras.layers.Concatenate(axis=channel_axis, name='concat_second_block')([l_branch, ab_branch])
-      x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(x)
-    else:
-      # x = conv2d_bn(x, 80, 1, 1, padding='valid')
-      x= kInceptionPointwise(x, filters=80, name='single_path', kType=kType)
-      x = conv2d_bn(x, 192, 3, 3, padding='valid')
-      x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(x)
-      # print('single path second block')
+    # mixed 8: 8 x 8 x 1280
+    x = create_inception_v3_mixed_layer(x, id=8, name='mixed8', channel_axis=channel_axis, kType=kType)
 
-    if max_mix_idx >= 0:
-        for id_layer in range(max_mix_idx+1):
-            if (max_mix_deep_two_paths_idx >= id_layer):
-                x = create_inception_v3_two_path_mixed_layer(x,  id=id_layer,  name='mixed'+str(id_layer),
-                    channel_axis=channel_axis, bottleneck_compression=deep_two_paths_bottleneck_compression, 
-                    compression=deep_two_paths_compression, has_batch_norm=True, kType=kType)
-            else:
-                x = create_inception_v3_mixed_layer(x,  id=id_layer,  name='mixed'+str(id_layer), channel_axis=channel_axis, kType=kType)
-
-            # --- ADDING THE FOLLOWING IF-BLOCK ---
-            # Add the CBAM block after the 'mixed5' layer has been created.
-            if id_layer == 5:
-                print("Applying CBAM block after mixed5...")
-                # x = attention.cbam_block(x)
-                x = attention.CBAMBlock()(x)
-            # ------------------------------------
+    # mixed 9, 10: 8 x 8 x 2048
+    for i in range(9, 11):
+        x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
+    
     if include_top:
         # Classification block
         x = keras.layers.GlobalAveragePooling2D(name='avg_pool')(x)
@@ -701,9 +617,8 @@ def two_path_inception_v3(
         elif pooling == 'max':
             x = keras.layers.GlobalMaxPooling2D()(x)
 
-    inputs = img_input
     # Create model.
-    model = keras.models.Model(inputs, x, name=model_name)
+    model = keras.models.Model(img_input, x, name=model_name)
     return model
 
 def compiled_full_two_path_inception_v3(
