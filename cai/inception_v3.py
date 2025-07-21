@@ -597,9 +597,9 @@ def two_path_inception_v3(
     for i in range(4, 7):
         x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
         # --- ADDING THE CBAM BLOCK ---
-        if i == 5:
-            print("Applying CBAM Block Layer after mixed5...")
-            x = attention.CBAMBlock()(x)
+        # if i == 5:
+        #     print("Applying CBAM Block Layer after mixed5...")
+        #     x = attention.CBAMBlock()(x)
         # -----------------------------
             
     if include_top:
