@@ -556,6 +556,7 @@ def two_path_inception_v3(
     # This is the new, single-branch implementation.
     # It will replace the entire body of the two_path_inception_v3 function.
     
+    
     img_input = keras.layers.Input(shape=input_shape, name='rgb_input')
 
     if keras.backend.image_data_format() == 'channels_first':
@@ -564,13 +565,15 @@ def two_path_inception_v3(
         channel_axis = 3
 
     # 1. Create LAB tensor from RGB input
+    print("Creating LAB Paths...")
     lab_tensor = color_layers.RgbToLab(name='rgb_to_lab')(img_input)
 
     # 2. Concatenate RGB and LAB to create a 6-channel tensor
+    print("Concatenating RGB & LAB channels...")
     x = keras.layers.Concatenate(axis=channel_axis, name='concat_rgb_lab')([img_input, lab_tensor])
     
-    # 3. Standard InceptionV3 architecture starts here, accepting the 6-channel input `x`
-    # The first conv layer will automatically adapt to the 6 input channels.
+    # 3. Standard InceptionV3 architecture starts here
+    print("Creating Single 6-Channel Path...")
     x = conv2d_bn(x, 32, 3, 3, strides=(2, 2), padding='valid')
     x = conv2d_bn(x, 32, 3, 3, padding='valid')
     x = conv2d_bn(x, 64, 3, 3)
@@ -580,33 +583,25 @@ def two_path_inception_v3(
     x = conv2d_bn(x, 192, 3, 3, padding='valid')
     x = keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(x)
 
-    # mixed 0, 1, 2: 35 x 35 x 288
+    # This part of the code uses a helper function from the library to build the mixed layers
+    # Your notebook trains up to mixed6, so we will stop there.
+    
+    # mixed 0, 1, 2
     for i in range(3):
-        x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
-
-    # mixed 3: 17 x 17 x 768
+         x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
+    
+    # mixed 3
     x = create_inception_v3_mixed_layer(x, id=3, name='mixed3', channel_axis=channel_axis, kType=kType)
     
-    # mixed 4, 5, 6: 17 x 17 x 768
+    # mixed 4, 5, 6
     for i in range(4, 7):
         x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
         # --- ADDING THE CBAM BLOCK ---
-        # We will add it after mixed5 as originally intended
         if i == 5:
             print("Applying CBAM Block Layer after mixed5...")
             x = attention.CBAMBlock()(x)
         # -----------------------------
             
-    # mixed 7: 17 x 17 x 768
-    x = create_inception_v3_mixed_layer(x, id=7, name='mixed7', channel_axis=channel_axis, kType=kType)
-
-    # mixed 8: 8 x 8 x 1280
-    x = create_inception_v3_mixed_layer(x, id=8, name='mixed8', channel_axis=channel_axis, kType=kType)
-
-    # mixed 9, 10: 8 x 8 x 2048
-    for i in range(9, 11):
-        x = create_inception_v3_mixed_layer(x, id=i, name='mixed'+str(i), channel_axis=channel_axis, kType=kType)
-    
     if include_top:
         # Classification block
         x = keras.layers.GlobalAveragePooling2D(name='avg_pool')(x)
